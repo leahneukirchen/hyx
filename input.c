@@ -327,6 +327,8 @@ static bool do_delete(struct input *input, bool back)
         if (!input->cur)
             return false;
         cur_move_rel(input, MOVE_LEFT, 1, 1);
+        if (!input->input_mode.insert)
+            return true;
     }
 
     switch (input->mode) {
