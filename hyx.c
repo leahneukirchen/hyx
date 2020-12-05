@@ -52,6 +52,12 @@ static void sighdlr(int num)
     case SIGWINCH:
         view.winch = true;
         break;
+    case SIGTSTP:
+	view.tstp = true;
+	break;
+    case SIGCONT:
+	view.cont = true;
+	break;
     case SIGALRM:
         /* This is used in parsing escape sequences,
          * but we don't need to do anything here. */
@@ -168,6 +174,8 @@ int main(int argc, char **argv)
     memset(&sigact, 0, sizeof(sigact));
     sigact.sa_handler = sighdlr;
     sigaction(SIGWINCH, &sigact, NULL);
+    sigaction(SIGTSTP, &sigact, NULL);
+    sigaction(SIGCONT, &sigact, NULL);
     sigaction(SIGALRM, &sigact, NULL);
     sigaction(SIGINT, &sigact, NULL);
 
@@ -181,6 +189,19 @@ int main(int argc, char **argv)
         if (view.winch) {
             view_recompute(&view, true);
             view.winch = false;
+        }
+        if (view.tstp) {
+            view_text(&view);
+            fflush(stdout);
+            view.tstp = false;
+            raise(SIGSTOP);
+            /* likely continues with view.cont=true */
+        }
+        if (view.cont) {
+            view_recompute(&view, true);
+	    view_dirty_from(&view, 0);
+	    view_visual(&view);
+            view.cont = false;
         }
         assert(input.cur >= view.start && input.cur < view.start + view.rows * view.cols);
         view_update(&view);

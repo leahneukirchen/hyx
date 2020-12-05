@@ -21,6 +21,8 @@ struct view {
     unsigned pos_digits;
     bool color;
     bool winch;
+    bool cont;
+    bool tstp;
 
     struct termios term;
 };
