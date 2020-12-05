@@ -582,10 +582,12 @@ void input_get(struct input *input, bool *quit)
     case 0x7: /* ctrl + G */
         {
              char buf[256];
-             snprintf(buf, sizeof buf, "\"%s\"%s%zd bytes",
+             snprintf(buf, sizeof buf, "\"%s\"%s%zd/%zd bytes --%zd%%--",
                  input->view->blob->filename,
                  input->view->blob->alloc == BLOB_MMAP ? " [mmap] " : " ",
-                 blob_length(input->view->blob));
+                 input->cur,
+                 blob_length(input->view->blob),
+                 ((input->cur+1) * 100) / blob_length(input->view->blob));
              view_error(V, buf);
         }
         break;
