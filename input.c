@@ -579,6 +579,17 @@ void input_get(struct input *input, bool *quit)
         view_dirty_from(V, 0); /* FIXME suboptimal */
         break;
 
+    case 0x7: /* ctrl + G */
+        {
+             char buf[256];
+             snprintf(buf, sizeof buf, "\"%s\"%s%zd bytes",
+                 input->view->blob->filename,
+                 input->view->blob->alloc == BLOB_MMAP ? " [mmap] " : " ",
+                 blob_length(input->view->blob));
+             view_error(V, buf);
+        }
+        break;
+
     case 0xc: /* ctrl + L */
         view_dirty_from(V, 0);
         break;
