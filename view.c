@@ -121,15 +121,20 @@ void view_free(struct view *view)
     free(view->dirty);
 }
 
-void view_error(struct view *view, char *msg)
+void view_message(struct view *view, char const *msg, char const *color)
 {
     cursor_line(view->rows - 1);
     print(clear_line);
-    if (view->color) print(color_red);
+    if (view->color && color) print(color);
     printf("%*c  %s", view->pos_digits, ' ', msg);
-    if (view->color) print(color_normal);
+    if (view->color && color) print(color_normal);
     fflush(stdout);
     view->dirty[view->rows - 1] = 2; /* redraw at the next keypress */
+}
+
+void view_error(struct view *view, char const *msg)
+{
+    view_message(view, msg, color_red);
 }
 
 /* FIXME hex and ascii mode look very similar */
@@ -189,13 +194,11 @@ static void render_line(struct view *view, size_t off, size_t last)
 
             if (!I->input_mode.ascii) {
                 print(bold_on);
-                if (I->mode == INPUT) {
-                    if (!I->low_nibble) print(underline_on);
-                    putchar(digits[0]);
-                    print(I->low_nibble ? underline_on : underline_off);
-                    putchar(digits[1]);
-                    if (I->low_nibble) print(underline_off);
-                }
+                if (I->mode == INPUT && !I->low_nibble) print(underline_on);
+                putchar(digits[0]);
+                if (I->mode == INPUT) print(I->low_nibble ? underline_on : underline_off);
+                putchar(digits[1]);
+                if (I->mode == INPUT && I->low_nibble) print(underline_off);
                 print(bold_off);
             }
             else

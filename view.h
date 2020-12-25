@@ -21,8 +21,7 @@ struct view {
     unsigned pos_digits;
     bool color;
     bool winch;
-    bool cont;
-    bool tstp;
+    bool tstp, cont;
 
     struct termios term;
 };
@@ -34,7 +33,8 @@ void view_recompute(struct view *view, bool winch);
 void view_set_cols(struct view *view, bool relative, int cols);
 void view_free(struct view *view);
 
-void view_error(struct view *view, char *msg);
+void view_message(struct view *view, char const *msg, char const *color);
+void view_error(struct view *view, char const *msg);
 
 void view_update(struct view *view);
 

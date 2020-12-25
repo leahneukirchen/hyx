@@ -2,9 +2,13 @@
  *
  * Copyright (c) 2016-2020 Lorenz Panny
  *
- * This is hyx version 2020.06.09.
+ * This is hyx version 2020.12.24.
  * Check for newer versions at https://yx7.cc/code.
  * Please report bugs to y@yx7.cc.
+ *
+ * Contributors:
+ *     2018, anonymous          Faster search algorithm.
+ *     2020, Leah Neukirchen    Suspend on ^Z. File information on ^G.
  *
  * This program is released under the MIT license; see license.txt.
  *
@@ -72,7 +76,7 @@ static void sighdlr(int num)
 
 __attribute__((noreturn)) void version()
 {
-    printf("This is hyx version 2020.06.09.\n");
+    printf("This is hyx version 2020.12.24.\n");
     exit(EXIT_SUCCESS);
 }
 
@@ -112,10 +116,11 @@ __attribute__((noreturn)) void help(int st)
     printf("p               paste\n");
     printf("P               paste and move cursor\n");
     printf("\n");
-    printf("], [            increment/decrement number of columns\n");
+    printf("], [            increase/decrease number of columns\n");
     printf("\n");
     printf("ctrl+u, ctrl+d  scroll up/down one page\n");
     printf("g, G            jump to start/end of screen or file\n");
+    printf("^, $            jump to start/end of current line\n");
     printf("\n");
     printf(":               enter command (see below)\n");
     printf("\n");
@@ -124,6 +129,9 @@ __attribute__((noreturn)) void help(int st)
     printf("n, N            jump to next/previous match\n");
     printf("\n");
     printf("ctrl+a, ctrl+x  increment/decrement current byte\n");
+    printf("\n");
+    printf("ctrl+g          show file name and current position\n");
+    printf("ctrl+z          suspend editor; use \"fg\" to continue\n");
     printf("\n");
 
     printf("    %scommands:%s\n\n",
@@ -195,12 +203,12 @@ int main(int argc, char **argv)
             fflush(stdout);
             view.tstp = false;
             raise(SIGSTOP);
-            /* likely continues with view.cont=true */
+            /* should continue with view.cont == true */
         }
         if (view.cont) {
             view_recompute(&view, true);
-	    view_dirty_from(&view, 0);
-	    view_visual(&view);
+            view_dirty_from(&view, 0);
+            view_visual(&view);
             view.cont = false;
         }
         assert(input.cur >= view.start && input.cur < view.start + view.rows * view.cols);

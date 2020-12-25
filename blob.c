@@ -138,7 +138,42 @@ size_t blob_paste(struct blob *blob, size_t pos, enum op_type type)
     return blob->clipboard.len;
 }
 
+#define DD(F,B) (dir > 0 ? (F) : (B))
+
 /* modified Boyer-Moore-Horspool algorithm. */
+static ssize_t blob_search_range(struct blob *blob, byte const *needle, size_t len, size_t start, ssize_t end, ssize_t dir, size_t tab[256])
+{
+    size_t blen = blob_length(blob);
+
+    assert(start < blen && end >= -1 && end <= (ssize_t) blen);
+    assert(DD((ssize_t) start <= end, end <= (ssize_t) start));
+
+    if (len > DD(end-start, start-end)) /* needle longer than range */
+        return -1;
+
+    for (ssize_t i = start; DD(i < end, i > end) ; ) {
+
+        if (i + len > blen) {
+            /* not enough space for pattern: skip */
+            i += dir;
+            continue;
+        }
+        assert(i >= 0 && i + len <= blen);
+
+        bool found = true;
+        for (ssize_t j = DD(len-1, 0); found && j >= 0 && (size_t) j < len; j -= dir)
+            found = blob_at(blob, i + j) == needle[j];
+        if (found)
+            return i;
+
+        i += dir * (ssize_t) tab[blob_at(blob, i + (dir > 0 ? len - 1 : 0))];
+
+    }
+
+    /* not found */
+    return -1;
+}
+
 ssize_t blob_search(struct blob *blob, byte const *needle, size_t len, size_t start, ssize_t dir)
 {
     size_t blen = blob_length(blob);
@@ -147,42 +182,23 @@ ssize_t blob_search(struct blob *blob, byte const *needle, size_t len, size_t st
         return -1;
 
     assert(start < blen);
-    assert(dir == -1 || dir == +1);
+    assert(dir == +1 || dir == -1);
 
-    /* preprocessing inlined for simplicity; patterns are usually short */
+    /* could do preprocessing once per needle/dir pair, but patterns are usually short */
     size_t tab[256];
     for (size_t j = 0; j < 256; ++j)
         tab[j] = len;
-    for (size_t j = 0; j < len - 1; ++j)
-        tab[needle[dir > 0 ? j : len - 1 - j]] = len - 1 - j;
+    for (size_t j = 0; j < len-1; ++j)
+        tab[needle[DD(j, len-1-j)]] = len-1-j;
 
-    for (size_t i = start; ; ) {
+    ssize_t r = blob_search_range(blob, needle, len, start, DD((ssize_t) blen, -1), dir, tab);
+    if (r < 0)  /* wrap around */
+        r = blob_search_range(blob, needle, len, DD(0, blen-1), start, dir, tab);
 
-        if (i + len > blen) {
-            i = (i + blen + dir) % blen;
-            continue;
-        }
-
-        bool found = true;
-        for (ssize_t j = dir > 0 ? len - 1 : 0; found && j >= 0 && (size_t) j < len; j -= dir)
-            found = blob_at(blob, i + j) == needle[j];
-        if (found)
-            return i;
-
-        ssize_t ii = i + dir * tab[blob_at(blob, i + (dir > 0 ? len - 1 : 0))];
-        if (ii < 0 || (size_t) ii >= blen) {
-            i = ii < 0 ? blen - 1 : 0;
-            continue;
-        }
-        if (dir > 0 && i < start && (size_t) ii >= start)
-            break;
-        if (dir < 0 && i > start && ii <= (ssize_t) start)
-            break;
-        i = (ii % blen + blen) % blen;
-    }
-
-    return -1;
+    return r;
 }
+
+#undef DD
 
 
 /* blob_load* functions must be called with a fresh struct from blob_init() */
