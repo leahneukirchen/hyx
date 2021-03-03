@@ -605,6 +605,7 @@ void input_get(struct input *input, bool *quit)
         printf("\x1b[%uH", V->rows); /* move to last line */
         view_text(V);
         printf(":");
+        fflush(stdout);
         input_cmd(input, quit);
         view_dirty_from(V, 0);
         view_visual(V);
@@ -614,6 +615,7 @@ void input_get(struct input *input, bool *quit)
         printf("\x1b[%uH", V->rows); /* move to last line */
         view_text(V);
         printf("/");
+        fflush(stdout);
         input_search(input);
         view_dirty_from(V, 0);
         view_visual(V);
