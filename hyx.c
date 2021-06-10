@@ -1,8 +1,8 @@
 /*
  *
- * Copyright (c) 2016-2020 Lorenz Panny
+ * Copyright (c) 2016-2021 Lorenz Panny
  *
- * This is hyx version 2020.12.24.
+ * This is hyx version 2021.06.09.
  * Check for newer versions at https://yx7.cc/code.
  * Please report bugs to y@yx7.cc.
  *
@@ -76,7 +76,7 @@ static void sighdlr(int num)
 
 __attribute__((noreturn)) void version()
 {
-    printf("This is hyx version 2020.12.24.\n");
+    printf("This is hyx version 2021.06.09.\n");
     exit(EXIT_SUCCESS);
 }
 
@@ -125,7 +125,8 @@ __attribute__((noreturn)) void help(int st)
     printf(":               enter command (see below)\n");
     printf("\n");
     printf("/x (hex string) search for hexadecimal bytes\n");
-    printf("/s (characters) search for ascii string\n");
+    printf("/s (characters) search for unicode string (utf8)\n");
+    printf("/w (characters) search for unicode string (ucs2)\n");
     printf("n, N            jump to next/previous match\n");
     printf("\n");
     printf("ctrl+a, ctrl+x  increment/decrement current byte\n");

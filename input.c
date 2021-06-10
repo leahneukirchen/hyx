@@ -791,6 +791,33 @@ static size_t unhex(byte **ret, char const *hex)
     return len;
 }
 
+/* NB: this accepts some technically invalid inputs */
+static size_t utf8_to_ucs2(byte **ret, char const *str)
+{
+    size_t len = 0;
+    *ret = malloc_strict(2 * strlen(str));
+    for (uint32_t c, b; (c = *str++); ) {
+        if (!(c & 0x80)) b = 0;
+        else if ((c & 0xe0) == 0xc0) c &= 0x1f, b = 1;
+        else if ((c & 0xf0) == 0xe0) c &= 0x0f, b = 2;
+        else if ((c & 0xf8) == 0xf0) c &= 0x07, b = 3;
+        else {
+bad:
+            free(*ret);
+            *ret = NULL;
+            return 0;
+        }
+        while (b--) {
+            if ((*str & 0xc0) != 0x80) goto bad;
+            c <<= 6, c |= (*str++ & 0x3f);
+        }
+        if (c >> 16) goto bad; /* not representable */
+        (*ret)[len++] = c >> 0;
+        (*ret)[len++] = c >> 8;
+    }
+    *ret = realloc_strict(*ret, len); /* shrink to what we actually used */
+    return len;
+}
 
 void input_search(struct input *input)
 {
@@ -808,12 +835,13 @@ void input_search(struct input *input)
 
     if (!(p = strtok(buf, " ")))
         return;
-    else if (!strcmp(p, "x")) {
+    else if (!strcmp(p, "x") || !strcmp(p, "w")) {
+        size_t (*fun)(byte **, char const *) = (*p == 'x') ? unhex : utf8_to_ucs2;
         if (!(q = strtok(NULL, " "))) {
             q = p;
             goto str;
         }
-        input->search.len = unhex(&input->search.needle, q);
+        input->search.len = fun(&input->search.needle, q);
     }
     else if (!strcmp(p, "s")) {
         if (!(q = strtok(NULL, "")))

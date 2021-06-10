@@ -27,10 +27,13 @@ void view_init(struct view *view, struct blob *blob, struct input *input)
     view->color = true;
     if (tcgetattr(fileno(stdin), &view->term))
         pdie("tcgetattr");
+    view->initialized = true;
 }
 
 void view_text(struct view *view)
 {
+    if (!view->initialized) return;
+
     cursor_column(0);
     print(clear_line);
     print(show_cursor);
@@ -44,10 +47,13 @@ void view_text(struct view *view)
 
 void view_visual(struct view *view)
 {
+    assert(view->initialized);
+
     struct termios term = view->term;
     term.c_lflag &= ~ICANON & ~ECHO;
     if (tcsetattr(fileno(stdin), TCSANOW, &term))
         pdie("tcsetattr");
+
     print(hide_cursor);
 }
 

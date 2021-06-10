@@ -8,6 +8,8 @@
 
 struct input;
 struct view {
+    bool initialized;
+
     struct blob *blob;
     struct input *input; /* FIXME hack */
 
