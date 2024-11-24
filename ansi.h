@@ -21,4 +21,7 @@ static char const color_cyan[] = "\x1b[36m";
 static char const color_white[] = "\x1b[37m";
 static char const color_normal[] = "\x1b[39m";
 
+static char const enter_alternate_screen[] = "\x1b[?1049h\x1b[0;0H";
+static char const leave_alternate_screen[] = "\x1b[?1049l";
+
 #endif

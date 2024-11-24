@@ -140,6 +140,8 @@ start_timer:
         case 'B': state = none; r = KEY_SPECIAL_DOWN; goto stop_timer;
         case 'C': state = none; r = KEY_SPECIAL_RIGHT; goto stop_timer;
         case 'D': state = none; r = KEY_SPECIAL_LEFT; goto stop_timer;
+        case 'F': state = none; r = KEY_SPECIAL_END; goto stop_timer;
+        case 'H': state = none; r = KEY_SPECIAL_HOME; goto stop_timer;
         case '3': state = need_tilde; r = KEY_SPECIAL_DELETE; goto next;
         case '5': state = need_tilde; r = KEY_SPECIAL_PGUP; goto next;
         case '6': state = need_tilde; r = KEY_SPECIAL_PGDOWN; goto next;
@@ -250,6 +252,7 @@ static void do_reset_hard(struct input *input)
         toggle_mode_select(input);
     input->input_mode.insert = input->input_mode.ascii = false;
     cur_adjust(input);
+    view_dirty_at(input->view, input->cur);
 }
 
 static void toggle_mode_insert(struct input *input)
@@ -603,7 +606,7 @@ void input_get(struct input *input, bool *quit)
 
     case ':':
         printf("\x1b[%uH", V->rows); /* move to last line */
-        view_text(V);
+        view_text(V, false);
         printf(":");
         input_cmd(input, quit);
         view_dirty_from(V, 0);
@@ -612,7 +615,7 @@ void input_get(struct input *input, bool *quit)
 
     case '/':
         printf("\x1b[%uH", V->rows); /* move to last line */
-        view_text(V);
+        view_text(V, false);
         printf("/");
         input_search(input);
         view_dirty_from(V, 0);

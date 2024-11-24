@@ -30,13 +30,16 @@ void view_init(struct view *view, struct blob *blob, struct input *input)
     view->initialized = true;
 }
 
-void view_text(struct view *view)
+void view_text(struct view *view, bool leave_alternate)
 {
     if (!view->initialized) return;
 
+    if (leave_alternate)
+        print(leave_alternate_screen);
     cursor_column(0);
     print(clear_line);
     print(show_cursor);
+    fflush(stdout);
 
     if (tcsetattr(fileno(stdin), TCSANOW, &view->term)) {
         /* can't pdie() because that risks infinite recursion */
@@ -54,7 +57,9 @@ void view_visual(struct view *view)
     if (tcsetattr(fileno(stdin), TCSANOW, &term))
         pdie("tcsetattr");
 
+    print(enter_alternate_screen);
     print(hide_cursor);
+    fflush(stdout);
 }
 
 void view_set_cols(struct view *view, bool relative, int cols)

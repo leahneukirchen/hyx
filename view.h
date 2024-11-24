@@ -29,7 +29,7 @@ struct view {
 };
 
 void view_init(struct view *view, struct blob *blob, struct input *input);
-void view_text(struct view *view);
+void view_text(struct view *view, bool leave_alternate);
 void view_visual(struct view *view);
 void view_recompute(struct view *view, bool winch);
 void view_set_cols(struct view *view, bool relative, int cols);

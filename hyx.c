@@ -1,14 +1,17 @@
 /*
  *
- * Copyright (c) 2016-2021 Lorenz Panny
+ * Copyright (c) 2016-2024 Lorenz Panny
  *
- * This is hyx version 2021.06.09.
+ * This is hyx version 2024.02.29.
  * Check for newer versions at https://yx7.cc/code.
- * Please report bugs to y@yx7.cc.
+ * Please report bugs to lorenz@yx7.cc.
  *
  * Contributors:
- *     2018, anonymous          Faster search algorithm.
- *     2020, Leah Neukirchen    Suspend on ^Z. File information on ^G.
+ *     2018, anonymous            Faster search algorithm.
+ *     2020, Leah Neukirchen      Suspend on ^Z. File information on ^G.
+ *     2022, Jeffrey H. Johnson   Makefile tweaks for MacOS.
+ *     2022, Mario Haustein       Makefile tweaks for Gentoo.
+ *     2023, Josef Schönberger    Use alternate screen. Home/End keys.
  *
  * This program is released under the MIT license; see license.txt.
  *
@@ -38,15 +41,15 @@ jmp_buf jmp_mainloop;
 
 void die(char const *s)
 {
+    view_text(&view, true);
     fprintf(stderr, "%s\n", s);
-    view_text(&view);
     exit(EXIT_FAILURE);
 }
 
 void pdie(char const *s)
 {
+    view_text(&view, true);
     perror(s);
-    view_text(&view);
     exit(EXIT_FAILURE);
 }
 
@@ -57,11 +60,11 @@ static void sighdlr(int num)
         view.winch = true;
         break;
     case SIGTSTP:
-	view.tstp = true;
-	break;
+        view.tstp = true;
+        break;
     case SIGCONT:
-	view.cont = true;
-	break;
+        view.cont = true;
+        break;
     case SIGALRM:
         /* This is used in parsing escape sequences,
          * but we don't need to do anything here. */
@@ -76,7 +79,7 @@ static void sighdlr(int num)
 
 __attribute__((noreturn)) void version()
 {
-    printf("This is hyx version 2021.06.09.\n");
+    printf("This is hyx version 2024.02.29.\n");
     exit(EXIT_SUCCESS);
 }
 
@@ -200,8 +203,7 @@ int main(int argc, char **argv)
             view.winch = false;
         }
         if (view.tstp) {
-            view_text(&view);
-            fflush(stdout);
+            view_text(&view, true);
             view.tstp = false;
             raise(SIGSTOP);
             /* should continue with view.cont == true */
@@ -219,9 +221,7 @@ int main(int argc, char **argv)
 
     } while (!quit);
 
-    cursor_line(0);
-    printf("%s", clear_screen);
-    view_text(&view);
+    view_text(&view, true);
 
     input_free(&input);
     view_free(&view);
