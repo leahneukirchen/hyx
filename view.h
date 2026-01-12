@@ -1,15 +1,18 @@
 #ifndef VIEW_H
 #define VIEW_H
 
-#include "blob.h"
+#define _GNU_SOURCE
 
-#include <termios.h>
-#include <sys/ioctl.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <assert.h>
+#include <setjmp.h>
 
 struct input;
-struct view {
-    bool initialized;
 
+struct view {
     struct blob *blob;
     struct input *input; /* FIXME hack */
 
@@ -18,20 +21,16 @@ struct view {
     uint8_t *dirty;
     signed scroll;
 
+    unsigned width, height; /* terminal dimensions */
+
     bool cols_fixed;
-    unsigned rows, cols;
+    unsigned rows, cols; /* bytes currently in view */
     unsigned pos_digits;
     bool color;
-    bool winch;
-    bool tstp, cont;
-
-    struct termios term;
 };
 
 void view_init(struct view *view, struct blob *blob, struct input *input);
-void view_text(struct view *view, bool leave_alternate);
-void view_visual(struct view *view);
-void view_recompute(struct view *view, bool winch);
+void view_recompute(struct view *view, bool changed);
 void view_set_cols(struct view *view, bool relative, int cols);
 void view_free(struct view *view);
 

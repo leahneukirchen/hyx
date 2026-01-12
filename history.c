@@ -1,43 +1,42 @@
 
-#include "common.h"
 #include "history.h"
+
+#include "common.h"
 #include "blob.h"
 
-#include <string.h>
-
-struct diff {
-    enum op_type type;
+struct change {
+    enum change_type type;
     size_t pos;
     byte *data;
     size_t len;
-    struct diff *next;
+    struct change *next;
 };
 
-static void diff_apply(struct blob *blob, struct diff *diff)
+static void change_apply(struct blob *blob, struct change *change)
 {
-    switch (diff->type) {
+    switch (change->type) {
     case REPLACE:
-        blob_replace(blob, diff->pos, diff->data, diff->len, false);
+        blob_replace(blob, change->pos, change->data, change->len, false);
         break;
     case INSERT:
-        blob_insert(blob, diff->pos, diff->data, diff->len, false);
+        blob_insert(blob, change->pos, change->data, change->len, false);
         break;
     case DELETE:
-        blob_delete(blob, diff->pos, diff->len, false);
+        blob_delete(blob, change->pos, change->len, false);
         break;
     default:
         die("unknown operation");
     }
 }
 
-void history_init(struct diff **history)
+void history_init(struct change **history)
 {
     *history = NULL;
 }
 
-void history_free(struct diff **history)
+void history_free(struct change **history)
 {
-    struct diff *tmp, *cur = *history;
+    struct change *tmp, *cur = *history;
     while (cur) {
         tmp = cur;
         cur = cur->next;
@@ -47,50 +46,50 @@ void history_free(struct diff **history)
     *history = NULL;
 }
 
-/* pushes a diff that _undoes_ the passed operation */
-void history_save(struct diff **history, enum op_type type, struct blob *blob, size_t pos, size_t len)
+/* pushes a change that _undoes_ the passed operation */
+void history_save(struct change **history, enum change_type type, struct blob *blob, size_t pos, size_t len)
 {
-    struct diff *diff = malloc_strict(sizeof(*diff));
-    diff->type = type;
-    diff->pos = pos;
-    diff->len = len;
-    diff->next = *history;
+    struct change *change = malloc_strict(sizeof(*change));
+    change->type = type;
+    change->pos = pos;
+    change->len = len;
+    change->next = *history;
 
     switch (type) {
     case DELETE:
-        diff->type = INSERT;
+        change->type = INSERT;
         /* fall-through */
     case REPLACE:
-        blob_read_strict(blob, pos, diff->data = malloc_strict(len), len);
+        blob_read_strict(blob, pos, change->data = malloc_strict(len), len);
         break;
     case INSERT:
-        diff->type = DELETE;
-        diff->data = NULL;
+        change->type = DELETE;
+        change->data = NULL;
         break;
     default:
         die("unknown operation");
     }
 
-    *history = diff;
+    *history = change;
 }
 
-bool history_step(struct diff **from, struct blob *blob, struct diff **to, size_t *pos)
+bool history_step(struct change **from, struct blob *blob, struct change **to, size_t *pos)
 {
-    struct diff *diff = *from;
+    struct change *change = *from;
 
-    if (!diff)
+    if (!change)
         return false;
 
     if (pos)
-        *pos = diff->pos;
+        *pos = change->pos;
 
     if (to)
-        history_save(to, diff->type, blob, diff->pos, diff->len);
+        history_save(to, change->type, blob, change->pos, change->len);
 
-    *from = diff->next;
-    diff_apply(blob, diff);
-    free(diff->data);
-    free(diff);
+    *from = change->next;
+    change_apply(blob, change);
+    free(change->data);
+    free(change);
 
     return true;
 }

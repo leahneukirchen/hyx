@@ -1,24 +1,27 @@
 
-all: CFLAGS ?= -O2 \
-               -pedantic -Wall -Wextra -DNDEBUG \
-               -D_FORTIFY_SOURCE=2 -fstack-protector-all
-all: CFLAGS += -std=c99
-all: hyx
+MODE ?= release
 
-debug: CFLAGS ?= -O0 -g \
-                 -fsanitize=undefined \
-                 -std=c99 -pedantic -Wall -Wextra -Werror \
-                 -fstack-protector-all
-debug: CFLAGS += -std=c99
-debug: hyx
+SOURCES = hyx.c common.c blob.c history.c term.c view.c input.c
+HEADERS = *.h
 
-hyx: *.h *.c
-	$(CC) \
-		$(CFLAGS) \
-		$(LDFLAGS) \
-		hyx.c common.c blob.c history.c view.c input.c \
-		-o hyx
+ifeq ($(MODE), release)
+CFLAGS ?= -Wall -Wextra \
+          -O2 -DNDEBUG \
+          -flto \
+          -D_FORTIFY_SOURCE=2 -fstack-protector-all
+else ifeq ($(MODE), debug)
+CFLAGS ?= -Wall -Wextra -Werror \
+          -O0 -g \
+          -fsanitize=address -fsanitize=undefined \
+          -fstack-protector-all
+endif
 
+CFLAGS += -std=c99 -pedantic
+
+hyx: $(SOURCES) $(HEADERS)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCES) -o $@
+
+.PHONY: clean
 clean:
 	rm -f hyx
 

@@ -1,18 +1,18 @@
 
-#include "common.h"
-#include "blob.h"
-#include "view.h"
+#define _GNU_SOURCE
+
 #include "input.h"
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <errno.h>
 #include <ctype.h>
-#include <setjmp.h>
-
-#include <time.h>
+#include <errno.h>
 #include <sys/time.h>
+
+#include "ansi.h"
+#include "common.h"
+#include "blob.h"
+#include "history.h"
+#include "term.h"
+#include "view.h"
 
 extern jmp_buf jmp_mainloop; /* hyx.c */
 
@@ -42,7 +42,7 @@ enum {
     KEY_SPECIAL_HOME, KEY_SPECIAL_END,
 };
 
-static key getch()
+static key getch(void)
 {
     int c;
     errno = 0;
@@ -60,7 +60,7 @@ static void ungetch(int c)
         pdie("ungetc");
 }
 
-static key get_key()
+static key get_key(void)
 {
     static const struct itimerval timeout = {{0}, {CONFIG_WAIT_ESCAPE / 1000000, CONFIG_WAIT_ESCAPE % 1000000}};
     static const struct itimerval stop = {0};
@@ -167,6 +167,63 @@ stop_timer:
     __builtin_unreachable();
 }
 
+static char *get_line(char c)
+{
+    static size_t cap = 0, len = 0;
+    static char *str = NULL;
+    char *ret = NULL;
+
+    /* FIXME this disrespects the view->color flag */
+    printf("%s%s%c%s%s", bold_on, color_yellow, c, bold_off, color_normal);
+    if (len) {
+        str[len] = 0;
+        fputs(str, stdout);
+    }
+    fputs(show_cursor, stdout);
+    fflush(stdout);
+
+    while (true) {
+        if (len >= cap)
+            str = realloc_strict(str, cap += 0x10);
+
+        key k = get_key();
+
+        switch (k) {
+        case KEY_SPECIAL_ESCAPE:
+            len = 0;
+            goto out;
+        case '\n':
+            goto eol;
+        case 0x7f: /* backspace */
+            if (!len)
+                goto out;
+            --len;
+            fputs("\b \b", stdout);
+            fflush(stdout);
+            break;
+        default:
+            if (!isprint(k))
+                break;
+            str[len++] = k;
+            fputc(k, stdout);
+            fflush(stdout);
+            break;
+        }
+    }
+
+eol:
+    str[len] = 0;
+    ret = str;
+    cap = len = 0;
+    str = NULL;
+
+out:
+    fputs(hide_cursor, stdout);
+    fflush(stdout);
+
+    return ret;
+}
+
 static void do_reset_soft(struct input *input)
 {
     input->low_nibble = 0;
@@ -183,6 +240,7 @@ static void toggle_mode_select(struct input *input)
         if (!blob_length(B))
             break;
         input->mode = SELECT;
+        view_dirty_at(V, input->cur);  /* in case cursor is just 1 past the end */
         input->sel = (input->cur -= (input->cur >= blob_length(B)));
         view_dirty_at(V, input->cur);
         break;
@@ -191,13 +249,15 @@ static void toggle_mode_select(struct input *input)
         view_dirty_fromto(input->view, input->sel, input->cur + 1);
         view_dirty_fromto(input->view, input->cur, input->sel + 1);
         break;
+    default:
+        __builtin_unreachable();
     }
 }
 
 static size_t cur_bound(struct input const *input)
 {
     size_t bound = blob_length(input->view->blob);
-    bound += !bound || (input->mode == INPUT && input->input_mode.insert);
+    bound += !bound || (input->mode == INPUT && input->mode_insert);
     assert(bound >= 1);
     return bound;
 }
@@ -224,9 +284,14 @@ static void cur_move_rel(struct input *input, enum cur_move_direction dir, size_
     do_reset_soft(input);
     view_dirty_at(V, input->cur);
     switch (dir) {
-    case MOVE_LEFT: input->cur = sat_sub_step(input->cur, off, step, cur_bound(input)); break;
-    case MOVE_RIGHT: input->cur = sat_add_step(input->cur, off, step, cur_bound(input)); break;
-    default: die("unexpected direction");
+    case MOVE_LEFT:
+        input->cur = sat_sub_step(input->cur, off, step, cur_bound(input));
+        break;
+    case MOVE_RIGHT:
+        input->cur = sat_add_step(input->cur, off, step, cur_bound(input));
+        break;
+    default:
+        __builtin_unreachable();
     }
     assert(input->cur < cur_bound(input));
     view_dirty_at(V, input->cur);
@@ -250,7 +315,7 @@ static void do_reset_hard(struct input *input)
 {
     if (input->mode == SELECT)
         toggle_mode_select(input);
-    input->input_mode.insert = input->input_mode.ascii = false;
+    input->mode_insert = input->mode_ascii = false;
     cur_adjust(input);
     view_dirty_at(input->view, input->cur);
 }
@@ -266,7 +331,7 @@ static void toggle_mode_insert(struct input *input)
 
     if (input->mode != INPUT)
         return;
-    input->input_mode.insert = !input->input_mode.insert;
+    input->mode_insert = !input->mode_insert;
     cur_adjust(input);
     view_dirty_at(V, input->cur);
 }
@@ -277,7 +342,7 @@ static void toggle_mode_ascii(struct input *input)
 
     if (input->mode != INPUT)
         return;
-    input->input_mode.ascii = !input->input_mode.ascii;
+    input->mode_ascii = !input->mode_ascii;
     view_dirty_at(V, input->cur);
 }
 
@@ -291,6 +356,9 @@ static void do_yank(struct input *input)
     case SELECT:
         blob_yank(input->view->blob, min(input->sel, input->cur), absdiff(input->sel, input->cur) + 1);
         toggle_mode_select(input);
+        break;
+    default:
+        __builtin_unreachable();
     }
 }
 
@@ -302,14 +370,14 @@ static size_t do_paste(struct input *input)
 
     if (input->mode != INPUT)
         return 0;
-    view_adjust(input->view);
+    view_adjust(V);
     do_reset_soft(input);
-    retval = blob_paste(B, input->cur, input->input_mode.insert ? INSERT : REPLACE);
+    retval = blob_paste(B, input->cur, input->mode_insert ? INSERT : REPLACE);
     view_recompute(V, false);
-    if (input->input_mode.insert)
-        view_dirty_from(input->view, input->cur);
+    if (input->mode_insert)
+        view_dirty_from(V, input->cur);
     else
-        view_dirty_fromto(input->view, input->cur, input->cur + input->view->blob->clipboard.len);
+        view_dirty_fromto(V, input->cur, input->cur + B->clipboard.len);
 
     return retval;
 }
@@ -330,12 +398,16 @@ static bool do_delete(struct input *input, bool back)
         if (!input->cur)
             return false;
         cur_move_rel(input, MOVE_LEFT, 1, 1);
-        if (!input->input_mode.insert)
+        if (!input->mode_insert)
             return true;
     }
 
     switch (input->mode) {
     case INPUT:
+        if (input->cur >= blob_length(B)) {
+            toggle_mode_insert(input);
+            return false;
+        }
         input->mode = SELECT;
         cur_adjust(input);
         input->sel = input->cur;
@@ -353,6 +425,9 @@ static bool do_delete(struct input *input, bool back)
         cur_adjust(input);
         view_dirty_from(V, input->cur);
         view_adjust(V);
+        break;
+    default:
+        __builtin_unreachable();
     }
     return true;
 }
@@ -423,38 +498,72 @@ void do_pgup_pgdown(struct input *input, size_t (*f)(size_t, size_t, size_t, siz
 {
     struct view *V = input->view;
 
+    size_t prev_start = V->start, prev_cur = input->cur;
+
     do_reset_soft(input);
     input->cur = f(input->cur, V->rows, V->cols, cur_bound(input));
     V->start = f(V->start, V->rows, V->cols, cur_bound(input));
-    view_dirty_from(V, 0);
+    if (prev_start != V->start)
+        view_dirty_from(V, 0);
+    else if (prev_cur != input->cur) {
+        view_dirty_at(V, prev_cur);
+        view_dirty_at(V, input->cur);
+    }
     view_adjust(V);
 }
 
 
-void input_cmd(struct input *input, bool *quit);
-void input_search(struct input *input);
+void input_cmd(struct input *input, char *str, bool *quit);
+void input_search(struct input *input, char *str);
 
 void input_get(struct input *input, bool *quit)
 {
-    key k;
-    byte b;
-
     struct view *V = input->view;
     struct blob *B = V->blob;
 
-    k = get_key();
+    if (input->mode == COMMAND || input->mode == SEARCH) {
+
+        cursor_line(V->rows - 1); /* move to last line */
+        fputs(clear_line, stdout);
+
+        char c = input->mode == COMMAND ? ':' : '/';
+        char *str = get_line(c);
+
+        if (str) {
+            switch (input->mode) {
+            case COMMAND:
+                input_cmd(input, str, quit);
+                break;
+            case SEARCH:
+                input_search(input, str);
+                break;
+            default:
+                __builtin_unreachable();
+            }
+            free(str);
+        }
+
+        input->mode = input->old_mode;
+        view_dirty_from(V, 0);
+
+        return; /* back to the main loop */
+    }
+
+    assert(input->mode == INPUT || input->mode == SELECT);
+
+    key k = get_key();
 
     if (input->mode == INPUT) {
 
-        if (input->input_mode.ascii && isprint(k)) {
+        if (input->mode_ascii && isprint(k)) {
 
             /* ascii input */
 
             if (!blob_length(B))
-                input->input_mode.insert = true;
+                input->mode_insert = true;
 
-            b = k;
-            if (input->input_mode.insert) {
+            byte b = k;
+            if (input->mode_insert) {
                 blob_insert(B, input->cur, &b, sizeof(b), true);
                 view_recompute(V, false);
                 view_dirty_from(V, input->cur);
@@ -473,9 +582,9 @@ void input_get(struct input *input, bool *quit)
             /* hex input */
 
             if (!blob_length(B))
-                input->input_mode.insert = true;
+                input->mode_insert = true;
 
-            if (input->input_mode.insert) {
+            if (input->mode_insert) {
                 if (!input->low_nibble)
                     input->cur_val = 0;
                 input->cur_val |= (k > '9' ? k - 'a' + 10 : k - '0') << 4 * (input->low_nibble = !input->low_nibble);
@@ -546,7 +655,7 @@ void input_get(struct input *input, bool *quit)
             input->sel = input->cur;
             input->cur = tmp;
         }
-        if (do_delete(input, false) && !input->input_mode.insert)
+        if (do_delete(input, false) && !input->mode_insert)
             toggle_mode_insert(input);
         break;
 
@@ -605,21 +714,13 @@ void input_get(struct input *input, bool *quit)
         break;
 
     case ':':
-        printf("\x1b[%uH", V->rows); /* move to last line */
-        view_text(V, false);
-        printf(":");
-        input_cmd(input, quit);
-        view_dirty_from(V, 0);
-        view_visual(V);
+        input->old_mode = input->mode;
+        input->mode = COMMAND;
         break;
 
     case '/':
-        printf("\x1b[%uH", V->rows); /* move to last line */
-        view_text(V, false);
-        printf("/");
-        input_search(input);
-        view_dirty_from(V, 0);
-        view_visual(V);
+        input->old_mode = input->mode;
+        input->mode = SEARCH;
         break;
 
     case 'n':
@@ -697,36 +798,31 @@ void input_get(struct input *input, bool *quit)
     }
 }
 
-void input_cmd(struct input *input, bool *quit)
+void input_cmd(struct input *input, char *str, bool *quit)
 {
-    char buf[0x100], *p;
-    unsigned long long n;
+    struct view *V = input->view;
 
-    if (!fgets_retry(buf, sizeof(buf), stdin))
-        pdie("fgets");
+    char *p;
 
-    if ((p = strchr(buf, '\n')))
-        *p = 0;
-
-    if (!(p = strtok(buf, " ")))
+    if (!(p = strtok(str, " ")))
         return;
     else if (!strcmp(p, "w") || !strcmp(p, "wq")) {
-        switch (blob_save(input->view->blob, strtok(NULL, " "))) {
+        switch (blob_save(V->blob, strtok(NULL, " "))) {
         case BLOB_SAVE_OK:
             if (!strcmp(p, "wq"))
                 do_quit(input, quit, false);
             break;
         case BLOB_SAVE_FILENAME:
-            view_error(input->view, "can't save: no filename.");
+            view_error(V, "can't save: no filename.");
             break;
         case BLOB_SAVE_NONEXISTENT:
-            view_error(input->view, "can't save: nonexistent path.");
+            view_error(V, "can't save: nonexistent path.");
             break;
         case BLOB_SAVE_PERMISSIONS:
-            view_error(input->view, "can't save: insufficient permissions.");
+            view_error(V, "can't save: insufficient permissions.");
             break;
         case BLOB_SAVE_BUSY:
-            view_error(input->view, "can't save: file is busy.");
+            view_error(V, "can't save: file is busy.");
             break;
         default:
             die("can't save: unknown error");
@@ -735,31 +831,44 @@ void input_cmd(struct input *input, bool *quit)
     else if (!strcmp(p, "q") || !strcmp(p, "q!")) {
         do_quit(input, quit, !strcmp(p, "q!"));
     }
-    else if (!strcmp(p, "color")) {
+    else if (!strcmp(p, "colors") || !strcmp(p, "color") /* legacy */) {
         if ((p = strtok(NULL, " ")))
-            input->view->color = *p == '1' || *p == 'y';
+            V->color = *p == '1' || *p == 'y';
     }
     else if (!strcmp(p, "columns")) {
         if ((p = strtok(NULL, " "))) {
             if (!strcmp(p, "auto")) {
-                view_set_cols(input->view, false, 0);
+                view_set_cols(V, false, 0);
             }
             else {
-                n = strtoull(p, &p, 0);
+                unsigned long long n = strtoull(p, &p, 0);
                 if (!*p)
-                    view_set_cols(input->view, false, n);
+                    view_set_cols(V, false, n);
             }
+        }
+    }
+    else if (!strcmp(p, "digits")) {
+        if ((p = strtok(NULL, " "))) {
+            if (!strcmp(p, "auto")) {
+                V->pos_digits = 4; /* rather arbitrary */
+            }
+            else {
+                unsigned long long n = strtoull(p, &p, 0);
+                if (!*p)
+                    V->pos_digits = n;
+            }
+            view_recompute(V, true);
         }
     }
     else {
         /* try to interpret the input as an offset */
-        n = strtoull(p, &p, 0);
+        unsigned long long n = strtoull(p, &p, 0);
         if (!*p) {
-            view_dirty_at(input->view, input->cur);
+            view_dirty_at(V, input->cur);
             if (n < cur_bound(input))
                 input->cur = n;
-            view_dirty_at(input->view, input->cur);
-            view_adjust(input->view);
+            view_dirty_at(V, input->cur);
+            view_adjust(V);
         }
     }
 }
@@ -822,21 +931,15 @@ bad:
     return len;
 }
 
-void input_search(struct input *input)
+void input_search(struct input *input, char *str)
 {
-    char buf[0x100], *p, *q;
-
-    if (!fgets_retry(buf, sizeof(buf), stdin))
-        pdie("fgets");
-
-    if ((p = strchr(buf, '\n')))
-        *p = 0;
+    char *p, *q;
 
     input->search.len = 0;
     free(input->search.needle);
     input->search.needle = NULL;
 
-    if (!(p = strtok(buf, " ")))
+    if (!(p = strtok(str, " ")))
         return;
     else if (!strcmp(p, "x") || !strcmp(p, "w")) {
         size_t (*fun)(byte **, char const *) = (*p == 'x') ? unhex : utf8_to_ucs2;
@@ -851,7 +954,7 @@ void input_search(struct input *input)
             q = p;
 str:
         input->search.len = strlen(q);
-        input->search.needle = (byte *) strdup(q);
+        input->search.needle = (byte *) strdup_strict(q);
     }
     else if (!(input->search.len = unhex(&input->search.needle, p))) {
         q = p;

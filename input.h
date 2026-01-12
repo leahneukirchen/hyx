@@ -1,19 +1,15 @@
 #ifndef INPUT_H
 #define INPUT_H
 
-#include "view.h"
+#include "common.h"
+
+struct view;
 
 struct input {
     struct view *view;
 
-    enum mode {
-        INPUT,
-        SELECT,
-    } mode;
-    struct {
-        bool insert: 1;
-        bool ascii: 1;
-    } input_mode;
+    enum mode mode, old_mode;
+    bool mode_insert, mode_ascii;
 
     size_t cur, sel;
     bool low_nibble;

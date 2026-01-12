@@ -1,14 +1,16 @@
 
-#include "common.h"
+#define _GNU_SOURCE
+
 #include "blob.h"
 
-#include <stdlib.h>
-#include <string.h>
 #include <errno.h>
-#include <unistd.h>
+#include <assert.h>
 #include <fcntl.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+
+#include "history.h"
 
 void blob_init(struct blob *blob)
 {
@@ -120,7 +122,7 @@ void blob_yank(struct blob *blob, size_t pos, size_t len)
     }
 }
 
-size_t blob_paste(struct blob *blob, size_t pos, enum op_type type)
+size_t blob_paste(struct blob *blob, size_t pos, enum change_type type)
 {
     if (!blob->clipboard.data) return 0;
 
@@ -141,7 +143,7 @@ size_t blob_paste(struct blob *blob, size_t pos, enum op_type type)
 #define DD(F,B) (dir > 0 ? (F) : (B))
 
 /* modified Boyer-Moore-Horspool algorithm. */
-static ssize_t blob_search_range(struct blob *blob, byte const *needle, size_t len, size_t start, ssize_t end, ssize_t dir, size_t tab[256])
+static ssize_t blob_search_range(struct blob const *blob, byte const *needle, size_t len, size_t start, ssize_t end, ssize_t dir, size_t tab[256])
 {
     size_t blen = blob_length(blob);
 
@@ -174,7 +176,7 @@ static ssize_t blob_search_range(struct blob *blob, byte const *needle, size_t l
     return -1;
 }
 
-ssize_t blob_search(struct blob *blob, byte const *needle, size_t len, size_t start, ssize_t dir)
+ssize_t blob_search(struct blob const *blob, byte const *needle, size_t len, size_t start, ssize_t dir)
 {
     size_t blen = blob_length(blob);
 
@@ -210,15 +212,15 @@ void blob_load(struct blob *blob, char const *filename)
     void *ptr = NULL;
 
     if (!filename)
-        return; /* We are creating a new (still unnamed) file */
+        return; /* creating a new (still unnamed) file */
 
-    blob->filename = strdup(filename);
+    blob->filename = strdup_strict(filename);
 
     errno = 0;
     if (stat(filename, &st)) {
         if (errno != ENOENT)
             pdie("stat");
-        return; /* We are creating a new file with given name */
+        return; /* creating a new file with given name */
     }
 
     if (0 > (fd = open(filename, O_RDONLY)))
@@ -299,7 +301,7 @@ enum blob_save_error blob_save(struct blob *blob, char const *filename)
 
     if (filename) {
         free(blob->filename);
-        blob->filename = strdup(filename);
+        blob->filename = strdup_strict(filename);
     }
     else if (blob->filename)
         filename = blob->filename;
@@ -308,8 +310,8 @@ enum blob_save_error blob_save(struct blob *blob, char const *filename)
 
     errno = 0;
     if (0 > (fd = open(filename,
-                    O_WRONLY | O_CREAT,
-                    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH))) {
+                       O_WRONLY | O_CREAT,
+                       S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH))) {
         switch (errno) {
         case ENOENT:  return BLOB_SAVE_NONEXISTENT;
         case EACCES:  return BLOB_SAVE_PERMISSIONS;
@@ -364,7 +366,7 @@ byte const *blob_lookup(struct blob const *blob, size_t pos, size_t *len)
     return blob->data + pos;
 }
 
-void blob_read_strict(struct blob *blob, size_t pos, byte *buf, size_t len)
+void blob_read_strict(struct blob const *blob, size_t pos, byte *buf, size_t len)
 {
     byte const *ptr;
     for (size_t i = 0, n; i < len; i += n) {

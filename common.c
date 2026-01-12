@@ -1,10 +1,11 @@
 
+#define _GNU_SOURCE
+
 #include "common.h"
 
-#include <stdlib.h>
-#include <stdio.h>
 #include <errno.h>
 #include <time.h>
+#include <unistd.h>
 #include <sys/mman.h>
 
 unsigned long bit_length(unsigned long n)
@@ -32,6 +33,14 @@ void *realloc_strict(void *ptr, size_t len)
     return ptr;
 }
 
+void *strdup_strict(char const *str)
+{
+    char *ret = strdup(str);
+    if (!ret)
+        die("strdup");
+    return ret;
+}
+
 void *mmap_strict(void *addr, size_t len, int prot, int flags, int fildes, off_t off)
 {
     void *ptr;
@@ -54,20 +63,7 @@ off_t lseek_strict(int fildes, off_t offset, int whence)
     return ret;
 }
 
-char *fgets_retry(char *s, int size, FILE *stream)
-{
-    char *ret;
-retry:
-    errno = 0;
-    if (!(ret = fgets(s, size, stream))) {
-        if (errno == EINTR)
-            goto retry;
-        pdie("fgets");
-    }
-    return ret;
-}
-
-uint64_t monotonic_microtime()
+uint64_t monotonic_microtime(void)
 {
     struct timespec t;
     if (clock_gettime(CLOCK_MONOTONIC, &t))

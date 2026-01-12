@@ -1,8 +1,8 @@
 /*
  *
- * Copyright (c) 2016-2024 Lorenz Panny
+ * Copyright (c) 2016-2026 Lorenz Panny
  *
- * This is hyx version 2024.02.29.
+ * This is hyx version 2026.01.11.
  * Check for newer versions at https://yx7.cc/code.
  * Please report bugs to lorenz@yx7.cc.
  *
@@ -17,15 +17,15 @@
  *
  */
 
-#include "common.h"
+#define _GNU_SOURCE
+
+#include "ansi.h"
 #include "blob.h"
+#include "term.h"
 #include "view.h"
 #include "input.h"
-#include "ansi.h"
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
+#include <unistd.h>
 #include <signal.h>
 #include <setjmp.h>
 
@@ -39,31 +39,17 @@ bool quit;
 jmp_buf jmp_mainloop;
 
 
-void die(char const *s)
-{
-    view_text(&view, true);
-    fprintf(stderr, "%s\n", s);
-    exit(EXIT_FAILURE);
-}
-
-void pdie(char const *s)
-{
-    view_text(&view, true);
-    perror(s);
-    exit(EXIT_FAILURE);
-}
-
 static void sighdlr(int num)
 {
     switch (num) {
     case SIGWINCH:
-        view.winch = true;
+        term.winch = true;
         break;
     case SIGTSTP:
-        view.tstp = true;
+        term.tstp = true;
         break;
     case SIGCONT:
-        view.cont = true;
+        term.cont = true;
         break;
     case SIGALRM:
         /* This is used in parsing escape sequences,
@@ -77,9 +63,9 @@ static void sighdlr(int num)
     }
 }
 
-__attribute__((noreturn)) void version()
+__attribute__((noreturn)) void version(void)
 {
-    printf("This is hyx version 2024.02.29.\n");
+    printf("This is hyx version 2026.01.11.\n");
     exit(EXIT_SUCCESS);
 }
 
@@ -140,11 +126,15 @@ __attribute__((noreturn)) void help(int st)
 
     printf("    %scommands:%s\n\n",
             tty ? color_yellow : "", tty ? color_normal : "");
-    printf("$offset         jump to offset (supports hex/dec/oct)\n");
+    printf("(offset)        jump to offset (supports hex/dec/oct)\n");
     printf("q               quit\n");
-    printf("w [$filename]   save\n");
-    printf("wq [$filename]  save and quit\n");
-    printf("color y/n       toggle colors\n");
+    printf("w [filename]    save\n");
+    printf("wq [filename]   save and quit\n");
+    printf("colors y/n      toggle colors\n");
+#if 0
+    printf("columns [num]   set number of displayed columns; \"auto\" for default\n");
+    printf("digits [num]    set width of position indicator; \"auto\" for default\n");
+#endif
 
     printf("\n");
 
@@ -157,11 +147,16 @@ int main(int argc, char **argv)
 
     char *filename = NULL;
 
+    bool parse_args = true;
     for (size_t i = 1; i < (size_t) argc; ++i) {
-        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help"))
+        if (!strcmp(argv[i], "--"))
+            parse_args = false;
+        else if (parse_args && (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")))
             help(0);
-        else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version"))
+        else if (parse_args && (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")))
             version();
+        else if (parse_args && *argv[i] == '-')
+            help(EXIT_FAILURE); /* unrecognized command-line argument */
         else if (!filename)
             filename = argv[i];
         else
@@ -170,7 +165,8 @@ int main(int argc, char **argv)
 
     blob_init(&blob);
     if (!isatty(fileno(stdin))) {
-        if (filename) help(EXIT_FAILURE);
+        if (filename)
+            help(EXIT_FAILURE);
         blob_load_stream(&blob, stdin);
         if (!freopen("/dev/tty", "r", stdin))
             pdie("could not reopen controlling TTY");
@@ -179,6 +175,7 @@ int main(int argc, char **argv)
         blob_load(&blob, filename);
     }
 
+    term_init();
     view_init(&view, &blob, &input);
     input_init(&input, &view);
 
@@ -191,28 +188,30 @@ int main(int argc, char **argv)
     sigaction(SIGALRM, &sigact, NULL);
     sigaction(SIGINT, &sigact, NULL);
 
-    view_recompute(&view, true);
-    view_visual(&view);
+    term_visual();
+    term.winch = true;
 
     do {
         /* This is used to redraw immediately when the window size changes. */
         setjmp(jmp_mainloop);
 
-        if (view.winch) {
+        if (term.winch) {
+            term_size(&view.width, &view.height);
             view_recompute(&view, true);
-            view.winch = false;
+            term.winch = false;
         }
-        if (view.tstp) {
-            view_text(&view, true);
-            view.tstp = false;
+        if (term.tstp) {
+            term_text(true);
+            term.tstp = false;
             raise(SIGSTOP);
-            /* should continue with view.cont == true */
+            /* should continue with term.cont == true */
         }
-        if (view.cont) {
-            view_recompute(&view, true);
+        if (term.cont) {
+            term_visual();
             view_dirty_from(&view, 0);
-            view_visual(&view);
-            view.cont = false;
+            term.winch = true;
+            term.cont = false;
+            continue;
         }
         assert(input.cur >= view.start && input.cur < view.start + view.rows * view.cols);
         view_update(&view);
@@ -221,7 +220,7 @@ int main(int argc, char **argv)
 
     } while (!quit);
 
-    view_text(&view, true);
+    term_text(true);
 
     input_free(&input);
     view_free(&view);

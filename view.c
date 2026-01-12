@@ -1,17 +1,15 @@
 
-#include "common.h"
-#include "blob.h"
 #include "view.h"
-#include "input.h"
-#include "ansi.h"
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
 #include <ctype.h>
 
-static void fprint(FILE *fp, char const *s) { fprintf(fp, "%s", s); }
-static void print(char const *s) { fprint(stdout, s); }
+#include "ansi.h"
+#include "common.h"
+#include "blob.h"
+#include "term.h"
+#include "input.h"
+
+static void print(char const *s) { fputs(s, stdout); }
 
 static size_t view_end(struct view const *view)
 {
@@ -24,51 +22,26 @@ void view_init(struct view *view, struct blob *blob, struct input *input)
     view->blob = blob;
     view->input = input;
     view->pos_digits = 4; /* rather arbitrary */
-    view->color = true;
-    if (tcgetattr(fileno(stdin), &view->term))
-        pdie("tcgetattr");
-    view->initialized = true;
+    view->color = !term.is_basic;
 }
 
-void view_text(struct view *view, bool leave_alternate)
+static unsigned view_max_cols(struct view const *view)
 {
-    if (!view->initialized) return;
-
-    if (leave_alternate)
-        print(leave_alternate_screen);
-    cursor_column(0);
-    print(clear_line);
-    print(show_cursor);
-    fflush(stdout);
-
-    if (tcsetattr(fileno(stdin), TCSANOW, &view->term)) {
-        /* can't pdie() because that risks infinite recursion */
-        perror("tcsetattr");
-        exit(EXIT_FAILURE);
-    }
+    assert(view->width);
+    return (view->width - (view->pos_digits + strlen(": ") + strlen("||"))) / strlen("xx c");
 }
 
-void view_visual(struct view *view)
-{
-    assert(view->initialized);
-
-    struct termios term = view->term;
-    term.c_lflag &= ~ICANON & ~ECHO;
-    if (tcsetattr(fileno(stdin), TCSANOW, &term))
-        pdie("tcsetattr");
-
-    print(enter_alternate_screen);
-    print(hide_cursor);
-    fflush(stdout);
-}
+static inline size_t satadd(size_t x, size_t y, size_t b) { assert(b >= 1); return min(b - 1, x + y); }
+static inline size_t satsub(size_t x, size_t y, size_t a) { return x < y || x - y < a ? a : x - y; }
 
 void view_set_cols(struct view *view, bool relative, int cols)
 {
+    unsigned max_cols = view_max_cols(view);
     if (relative) {
-        if (cols >= 0 || (unsigned) -cols <= view->cols)
-            cols += view->cols;
+        if (cols >= 0)
+            cols = satadd(view->cols,  cols, max_cols + 1);
         else
-            cols = view->cols;
+            cols = satsub(view->cols, -cols, 0);
     }
 
     if (!cols) {
@@ -85,11 +58,12 @@ void view_set_cols(struct view *view, bool relative, int cols)
         view->cols = cols;
         view_dirty_from(view, 0);
     }
+
+    view_adjust(view);
 }
 
-void view_recompute(struct view *view, bool winch)
+void view_recompute(struct view *view, bool changed)
 {
-    struct winsize winsz;
     unsigned old_rows = view->rows, old_cols = view->cols;
     unsigned digs = (bit_length(max(2, blob_length(view->blob)) - 1) + 3) / 4;
 
@@ -97,25 +71,27 @@ void view_recompute(struct view *view, bool winch)
         view->pos_digits = digs;
         view_dirty_from(view, 0);
     }
-    else if (!winch)
+    else if (!changed)
         return;
 
-    if (-1 == ioctl(fileno(stdout), TIOCGWINSZ, &winsz))
-        pdie("ioctl");
+    view->rows = view->height;
 
-    view->rows = winsz.ws_row;
-    if (!view->cols_fixed) {
-        view->cols = (winsz.ws_col - (view->pos_digits + strlen(": ") + strlen("||"))) / strlen("xx c");
-
+    size_t max_cols = view_max_cols(view);
+    if (!view->cols_fixed || view->cols > max_cols) {
+        view->cols = max_cols;
         if (view->cols > CONFIG_ROUND_COLS)
             view->cols -= view->cols % CONFIG_ROUND_COLS;
+        view->cols_fixed = false;
     }
 
-    if (!view->rows || !view->cols)
-        die("window too small.");
+    if (!view->rows)
+        view->rows = 1;
+    if (!view->cols)
+        view->cols = 1;
 
     if (view->rows == old_rows && view->cols == old_cols)
-        return;
+        if (view->cols > 1) /* when too narrow for even one column, always redraw */
+            return;
 
     /* update dirtiness array */
     if ((view->dirty = realloc_strict(view->dirty, view->rows * sizeof(*view->dirty))))
@@ -152,30 +128,30 @@ void view_error(struct view *view, char const *msg)
 static void render_line(struct view *view, size_t off, size_t last)
 {
     byte b;
-    char digits[0x10], *asciiptr;
-    size_t asciilen;
-    FILE *asciifp;
+    char digits[0x10], *hexptr, *asciiptr;
+    size_t hexlen, asciilen;
+    FILE *hexfp, *asciifp;
     struct input *I = view->input;
 
-    size_t sel_start = min(I->cur, I->sel), sel_end = max(I->cur, I->sel);
+    size_t const sel_start = min(I->cur, I->sel), sel_end = max(I->cur, I->sel);
     char const *last_color = NULL, *next_color;
 
+    if (!(hexfp = open_memstream(&hexptr, &hexlen)))
+        pdie("open_memstream");
     if (!(asciifp = open_memstream(&asciiptr, &asciilen)))
         pdie("open_memstream");
-#define BOTH(EX) for (FILE *fp; ; ) { fp = stdout; EX; fp = asciifp; EX; break; }
+#define BOTH(EX) for (FILE *fp; ; ) { fp = hexfp; EX; fp = asciifp; EX; break; }
 
     if (off <= I->cur && I->cur < off + view->cols) {
         /* cursor in current line */
-        if (view->color) print(color_yellow);
-        printf("%0*zx%c ", view->pos_digits, I->cur, I->input_mode.insert ? '+' : '>');
-        if (view->color) print(color_normal);
+        if (view->color) fputs(color_yellow, hexfp);
+        char const *space = &" "[I->cur >= ((size_t) 1 << 4 * view->pos_digits)]; /* in case cursor is just 1 past the end */
+        fprintf(hexfp, "%0*zx%c%s", view->pos_digits, I->cur, I->mode_insert ? '+' : '>', space);
+        if (view->color) fputs(color_normal, hexfp);
     }
     else {
-        printf("%0*zx: ", view->pos_digits, off);
+        fprintf(hexfp, "%0*zx: ", view->pos_digits, off);
     }
-
-    if (I->mode == SELECT && off > sel_start && off <= sel_end)
-        print(underline_on);
 
     for (size_t j = 0, len = blob_length(view->blob); j < view->cols; ++j) {
 
@@ -183,84 +159,101 @@ static void render_line(struct view *view, size_t off, size_t last)
             sprintf(digits, "%02hhx", b = blob_at(view->blob, off + j));
         }
         else {
-            b = 0;
+            b = ' ';
             strcpy(digits, "  ");
         }
 
-        if (I->mode == SELECT && off + j == sel_start)
-            print(underline_on);
+        bool in_selection = I->mode == SELECT && off + j >= sel_start && off + j <= sel_end;
 
         if (off + j >= last) {
             for (size_t p = j; p < view->cols; ++p)
-                printf("   ");
+                fputs("   ", hexfp);
             break;
         }
 
         if (off + j == I->cur) {
-            next_color = I->cur >= blob_length(view->blob) ? color_red : color_yellow;
+            next_color = I->cur >= len ? color_red : color_yellow;
             BOTH(
-                if (view->color && next_color != last_color) fprint(fp, next_color);
-                fprint(fp, inverse_video_on);
+                if (view->color && next_color != last_color) fputs(next_color, fp);
+                fputs(inverse_video_on, fp);
             );
 
-            if (!I->input_mode.ascii) {
-                print(bold_on);
-                if (I->mode == INPUT && !I->low_nibble) print(underline_on);
-                putchar(digits[0]);
-                if (I->mode == INPUT) print(I->low_nibble ? underline_on : underline_off);
-                putchar(digits[1]);
-                if (I->mode == INPUT && I->low_nibble) print(underline_off);
-                print(bold_off);
+            if (!I->mode_ascii) {
+                fputs(bold_on, hexfp);
+                if (I->mode == INPUT && !I->low_nibble) fputs(underline_on, hexfp);
+                fputc(digits[0], hexfp);
+                if (I->mode == INPUT) fputs(I->low_nibble ? underline_on : underline_off, hexfp);
+                fputc(digits[1], hexfp);
+                if (I->mode == INPUT && I->low_nibble) fputs(underline_off, hexfp);
+                fputs(bold_off, hexfp);
             }
             else
-                printf("%s", digits);
+                fputs(digits, hexfp);
 
-            if (I->mode == INPUT && I->input_mode.ascii)
+            if (I->mode == INPUT && I->mode_ascii)
                 fprintf(asciifp, "%s%s%c%s%s", bold_on, underline_on, isprint(b) ? b : '.', underline_off, bold_off);
             else
                 fputc(isprint(b) ? b : '.', asciifp);
 
             BOTH(
-                fprint(fp, inverse_video_off);
+                fputs(inverse_video_off, fp);
             );
         }
         else {
-            next_color = isalnum(b) ? color_cyan
+            next_color = in_selection ? color_yellow
+                       : isalnum(b) ? color_cyan
                        : isprint(b) ? color_blue
                        : !b ? color_red
                        : color_normal;
             BOTH(
                 if (view->color && next_color != last_color)
-                    fprint(fp, next_color);
+                    fputs(next_color, fp);
             );
             fputc(isprint(b) ? b : '.', asciifp);
-            printf("%s", digits);
+            fputs(digits, hexfp);
         }
         last_color = next_color;
 
-        if (I->mode == SELECT && (off + j == sel_end || j == view->cols - 1))
-            print(underline_off);
-
-        putchar(' ');
+        if (view->color)
+            fputc(' ', hexfp);
+        else {
+            if (I->mode == SELECT && off + j + 1 == sel_start)
+                fputc('<', hexfp);
+            else if (I->mode == SELECT && off + j == sel_end)
+                fputc('>', hexfp);
+            else if (in_selection)
+                fputc('_', hexfp);
+            else
+                fputc(' ', hexfp);
+        }
     }
-    if (view->color) print(color_normal);
+    if (view->color) fputs(color_normal, hexfp);
 
 #undef BOTH
+    if (fclose(hexfp))
+        pdie("fclose");
     if (fclose(asciifp))
         pdie("fclose");
-    putchar('|');
-    printf("%s", asciiptr);
+    printf("%s|%s%s|", hexptr, asciiptr, view->color ? color_normal : "");
+    free(hexptr);
     free(asciiptr);
-    if (view->color) print(color_normal);
-    putchar('|');
+
+    fflush(stdout);  /* done immediately to prevent flushing partial lines later */
 }
 
 void view_update(struct view *view)
 {
+    if (view->input->mode == COMMAND || view->input->mode == SEARCH)
+        /* cursor may still be visible by accident after a signal */
+        fputs(hide_cursor, stdout);
+
     size_t last = max(blob_length(view->blob), view->input->cur + 1);
 
     if (view->scroll) {
-        printf("\x1b[%ld%c", labs(view->scroll), view->scroll > 0 ? 'S' : 'T');
+        if (!term.is_basic)
+            scroll(view->scroll);
+        else
+            view_dirty_from(view, 0);
         view->scroll = 0;
     }
 
@@ -299,11 +292,6 @@ void view_dirty_fromto(struct view *view, size_t from, size_t to)
             view->dirty[i] = max(view->dirty[i], 1);
     }
 }
-
-static size_t satadd(size_t x, size_t y, size_t b)
-    { assert(b >= 1); return min(b - 1, x + y); }
-static size_t satsub(size_t x, size_t y, size_t a)
-    { return x < y || x - y < a ? a : x - y; }
 
 void view_adjust(struct view *view)
 {
